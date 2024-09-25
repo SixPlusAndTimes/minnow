@@ -6,14 +6,14 @@
 using namespace std;
 
 ByteStream::ByteStream( uint64_t capacity ) : 
-  capacity_( capacity + 1) , 
+  capacity_( capacity ) , 
   error_(false), 
-  storage_(capacity_ , ' '),
-  readptr_(0), 
-  writeptr_(0), 
+  storage_(),
   eof_(false), 
   bytes_pushed_(0), 
-  bytes_popped_(0)
+  bytes_popped_(0),
+  bytes_buffered_(0),
+  prefix_(0)
 {
 
 }
@@ -25,19 +25,21 @@ bool Writer::is_closed() const
 
 void Writer::push( string data )
 {
-  for (uint64_t i= 0; i < data.size(); i++) {
-    if ((writeptr_ + 1) % capacity_ == readptr_) {
-      break;
-    }
-    printf("i = %lu, writeptr_ = %lu, readptr_ = %lu, capacity_ = %lu\n",i, writeptr_, readptr_, capacity_);
-    
-    assert(writeptr_ <= storage_.size());
-    
-    storage_[writeptr_] = data[i];
-    writeptr_ = (writeptr_ + 1) % capacity_;
-    ++bytes_pushed_;
+  if (error_ || eof_) {
+    return ;
   }
-  cout << "bytes_pushed = " << bytes_pushed_ << endl;
+
+  if (data.size() > available_capacity()) {
+    data.resize(available_capacity()); 
+  }
+
+  if (0 == data.size()) {
+    return ;
+  }
+
+  bytes_buffered_ += data.size();
+  bytes_pushed_ += data.size();
+  storage_.push(std::move(data));
   return;
 }
 
@@ -48,12 +50,11 @@ void Writer::close()
 
 uint64_t Writer::available_capacity() const
 {
-  return capacity_ - ((writeptr_ - readptr_ + capacity_) % capacity_) - 1;
+  return capacity_ - bytes_buffered_;
 }
 
 uint64_t Writer::bytes_pushed() const
 {
-
   return bytes_pushed_;
 }
 
@@ -69,33 +70,32 @@ uint64_t Reader::bytes_popped() const
 
 string_view Reader::peek() const
 {
-  string_view res{};
-  if (writeptr_ > readptr_) {
-    res = string_view(storage_.begin() + readptr_, storage_.begin() + writeptr_);
-  }else if (writeptr_ < readptr_) {
-
-    res = string_view(storage_.begin() + writeptr_, storage_.end());
+  if (storage_.empty()) {
+    return {};
   }
-  cout << "peek: " << res << endl;
-  return res;
+  return string_view(storage_.front().begin() + prefix_, storage_.front().end());
 }
 
 void Reader::pop( uint64_t len )
 {
-  if (len <= 0) {
-    return ;
-  }
-
-  if (len < bytes_buffered()) {
-    bytes_popped_ += len;
-    readptr_ = (readptr_ + len) % capacity_;
-  }else {
-    bytes_popped_ += bytes_buffered();
-    readptr_ = writeptr_;
+  while (len > 0) {
+    uint64_t wind_len = storage_.front().size() - prefix_;
+    if (len >= wind_len) {
+      bytes_popped_ += wind_len;
+      bytes_buffered_ -= wind_len;
+      len -= wind_len;
+      storage_.pop();
+      prefix_ = 0;
+    } else {
+      prefix_ += len;
+      bytes_popped_ += len;
+      bytes_buffered_ -= len;
+      break;
+    }
   }
 }
 
 uint64_t Reader::bytes_buffered() const
 {
-  return (writeptr_ - readptr_ + capacity_) % capacity_;
+  return bytes_buffered_;
 }
